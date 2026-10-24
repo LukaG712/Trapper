@@ -30,7 +30,9 @@ export async function interactWithPage(options: InteractOptions): Promise<Intera
   const { page } = session;
 
   try {
-    // If code is provided, execute it
+    // If code is provided, execute it in the browser context.
+    // WARNING: This executes arbitrary JavaScript in the page context.
+    // The endpoint is protected by API key authentication.
     if (code) {
       try {
         const result = await page.evaluate((script) => {
@@ -97,9 +99,11 @@ async function executePrompt(page: Page, prompt: string): Promise<void> {
   const promptLower = prompt.toLowerCase();
 
   // Click commands: "click #button", "click .submit"
-  const clickMatch = promptLower.match(/click\s+([^\s,]+)/);
-  if (clickMatch) {
-    const selector = clickMatch[1];
+  // Match against lowercase for command detection, but extract from original to preserve case
+  const clickMatchLower = promptLower.match(/click\s+([^\s,]+)/);
+  if (clickMatchLower) {
+    const clickMatch = prompt.match(/click\s+([^\s,]+)/i);
+    const selector = clickMatch ? clickMatch[1] : clickMatchLower[1];
     await page.click(selector).catch(() => {
       logger.warn(`Could not click selector: ${selector}`);
     });
@@ -107,9 +111,11 @@ async function executePrompt(page: Page, prompt: string): Promise<void> {
   }
 
   // Type commands: "type Hello World"
-  const typeMatch = promptLower.match(/type\s+(.+)/);
-  if (typeMatch) {
-    const text = typeMatch[1];
+  // Match against lowercase for command detection, but extract from original to preserve case
+  const typeMatchLower = promptLower.match(/type\s+(.+)/);
+  if (typeMatchLower) {
+    const typeMatch = prompt.match(/type\s+(.+)/i);
+    const text = typeMatch ? typeMatch[1] : typeMatchLower[1];
     await page.keyboard.type(text);
     return;
   }
@@ -133,9 +139,11 @@ async function executePrompt(page: Page, prompt: string): Promise<void> {
   }
 
   // Press key: "press Enter"
-  const pressMatch = promptLower.match(/press\s+(\w+)/);
-  if (pressMatch) {
-    const key = pressMatch[1];
+  // Match against lowercase for command detection, but extract from original to preserve case
+  const pressMatchLower = promptLower.match(/press\s+(\w+)/);
+  if (pressMatchLower) {
+    const pressMatch = prompt.match(/press\s+(\w+)/i);
+    const key = pressMatch ? pressMatch[1] : pressMatchLower[1];
     await page.keyboard.press(key);
     return;
   }
