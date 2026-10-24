@@ -23,7 +23,7 @@ export async function createAgentJob(options: AgentOptions): Promise<string> {
 
   await queue.add('agent', options, {
     jobId,
-    attempts: 1,
+    attempts: 3,
   });
 
   logger.info(`Created agent job: ${jobId}`);

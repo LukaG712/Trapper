@@ -20,14 +20,26 @@ export function normalizeUrl(url: string, ignoreQueryParams: boolean = false): s
     if (ignoreQueryParams) {
       parsed.search = '';
     }
-    // Remove trailing slash for consistency, except for root
-    let href = parsed.href.replace(/\/+$/, '');
+    // Remove only one trailing slash for consistency, preserve root path
+    let href = parsed.href;
+    if (parsed.pathname !== '/' && href.endsWith('/')) {
+      href = href.slice(0, -1);
+    }
     if (!href) href = '/';
     return href;
   } catch {
     return url;
   }
 }
+
+// Common public suffixes that need 3+ parts for proper domain extraction
+const PUBLIC_SUFFIXES = new Set([
+  'co.uk', 'co.jp', 'co.kr', 'co.nz', 'co.za', 'co.in',
+  'com.au', 'com.br', 'com.cn', 'com.mx', 'com.tw',
+  'net.au', 'org.uk', 'org.au',
+  'gov.uk', 'gov.au',
+  'ac.uk', 'ac.jp',
+]);
 
 export function isSameDomain(url: string, baseUrl: string, allowSubdomains: boolean = false): boolean {
   try {
@@ -39,8 +51,18 @@ export function isSameDomain(url: string, baseUrl: string, allowSubdomains: bool
     }
 
     if (allowSubdomains) {
-      const baseDomain = parsedBase.hostname.split('.').slice(-2).join('.');
-      const urlDomain = parsedUrl.hostname.split('.').slice(-2).join('.');
+      // Extract registered domain, accounting for public suffixes like co.uk
+      const getRegisteredDomain = (hostname: string): string => {
+        const parts = hostname.split('.');
+        if (parts.length <= 2) return hostname;
+        const lastTwo = parts.slice(-2).join('.');
+        if (PUBLIC_SUFFIXES.has(lastTwo)) {
+          return parts.slice(-3).join('.');
+        }
+        return lastTwo;
+      };
+      const baseDomain = getRegisteredDomain(parsedBase.hostname);
+      const urlDomain = getRegisteredDomain(parsedUrl.hostname);
       return urlDomain === baseDomain;
     }
 
@@ -193,21 +215,27 @@ export async function crawl(
     robots = await fetchRobotsTxt(url);
   }
 
-  // Semaphore for concurrency control
+  // Async semaphore for concurrency control (thread-safe)
+  let semaphoreCount = maxConcurrency;
+  const semaphoreWaiters: Array<(value: void) => void> = [];
   const semaphore = {
-    count: maxConcurrency,
-    wait: () => new Promise<void>((resolve) => {
-      const check = () => {
-        if (semaphore.count > 0) {
-          semaphore.count--;
-          resolve();
-        } else {
-          setTimeout(check, 50);
-        }
-      };
-      check();
-    }),
-    release: () => { semaphore.count++; },
+    wait: (): Promise<void> => {
+      if (semaphoreCount > 0) {
+        semaphoreCount--;
+        return Promise.resolve();
+      }
+      return new Promise<void>((resolve) => {
+        semaphoreWaiters.push(resolve);
+      });
+    },
+    release: () => {
+      if (semaphoreWaiters.length > 0) {
+        const next = semaphoreWaiters.shift();
+        if (next) next();
+      } else {
+        semaphoreCount++;
+      }
+    },
   };
 
   while (queue.length > 0 && currentPage < limit) {
@@ -219,7 +247,8 @@ export async function crawl(
     // Check robots.txt
     if (robots && !ignoreRobotsTxt) {
       try {
-        if (!robots.isAllowed(entry.url, 'TrapperBot')) {
+        const userAgent = options.userAgent || config.crawl?.userAgent || 'Trapper/1.0 (+https://evershade.dev/bot)';
+        if (!robots.isAllowed(entry.url, userAgent)) {
           logger.info(`Blocked by robots.txt: ${entry.url}`);
           continue;
         }
@@ -268,9 +297,10 @@ export async function crawl(
           if (htmlToSearch) {
             const newLinks = await discoverLinks(entry.url, htmlToSearch, options);
 
+            const maxQueueSize = Math.max(limit, 100); // Cap queue to prevent unbounded growth
             for (const link of newLinks) {
               const linkNormalized = normalizeUrl(link, options.ignoreQueryParameters);
-              if (!visited.has(linkNormalized) && queue.length < limit * 2) {
+              if (!visited.has(linkNormalized) && queue.length < maxQueueSize) {
                 queue.push({ url: linkNormalized, depth: entry.depth + 1 });
               }
             }

@@ -5,7 +5,6 @@ import { Action } from '../../utils/types';
 import { executeActions, ActionsResult } from './actions';
 
 let browser: Browser | null = null;
-let browserContext: BrowserContext | null = null;
 
 // Session storage for /interact endpoint
 interface BrowserSession {
@@ -16,6 +15,26 @@ interface BrowserSession {
 
 const sessions = new Map<string, BrowserSession>();
 const SESSION_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
+
+// Periodic cleanup of expired sessions (every 5 minutes)
+let cleanupTimer: NodeJS.Timeout | null = null;
+
+export function startSessionCleanup(): void {
+  if (cleanupTimer) return;
+  cleanupTimer = setInterval(async () => {
+    await cleanupExpiredSessions();
+  }, 5 * 60 * 1000);
+  cleanupTimer.unref?.(); // Don't keep process alive
+  logger.info('Session cleanup timer started');
+}
+
+export function stopSessionCleanup(): void {
+  if (cleanupTimer) {
+    clearInterval(cleanupTimer);
+    cleanupTimer = null;
+    logger.info('Session cleanup timer stopped');
+  }
+}
 
 export async function getBrowser(): Promise<Browser> {
   if (!browser) {
@@ -36,20 +55,18 @@ export async function getBrowser(): Promise<Browser> {
 }
 
 export async function getContext(options?: { mobile?: boolean }): Promise<BrowserContext> {
-  if (!browserContext) {
-    const brow = await getBrowser();
-    const viewport = options?.mobile
-      ? { width: 375, height: 812 }
-      : { width: 1280, height: 800 };
+  // Create a new isolated context for each call to prevent cookie/state leakage
+  const brow = await getBrowser();
+  const viewport = options?.mobile
+    ? { width: 375, height: 812 }
+    : { width: 1280, height: 800 };
 
-    browserContext = await brow.newContext({
-      userAgent: options?.mobile
-        ? 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1'
-        : 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-      viewport,
-    });
-  }
-  return browserContext;
+  return await brow.newContext({
+    userAgent: options?.mobile
+      ? 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1'
+      : 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    viewport,
+  });
 }
 
 export interface BrowserScrapeOptions {
@@ -85,16 +102,12 @@ export async function scrapeWithBrowser(
         const reqUrl = route.request().url();
         const adPatterns = [
           '/ads/',
-          '/ad/',
-          'doubleclick',
-          'adservice',
-          'googlesyndication',
+          'doubleclick.net',
+          'adservice.',
+          'googlesyndication.com',
           'adsbygoogle',
           'facebook.com/plugins',
-          'pixel.',
-          'analytics.',
-          'google-analytics',
-          'facebook.com/tr',
+          '.facebook.com/tr/',
           'connect.facebook.net',
         ];
         if (adPatterns.some((p) => reqUrl.toLowerCase().includes(p))) {
@@ -206,6 +219,7 @@ export async function cleanupExpiredSessions(): Promise<void> {
 }
 
 export async function closeBrowser(): Promise<void> {
+  stopSessionCleanup();
   // Close all sessions
   for (const [id, session] of sessions.entries()) {
     await session.page.close().catch(() => {});
@@ -213,10 +227,6 @@ export async function closeBrowser(): Promise<void> {
     sessions.delete(id);
   }
 
-  if (browserContext) {
-    await browserContext.close();
-    browserContext = null;
-  }
   if (browser) {
     await browser.close();
     browser = null;
