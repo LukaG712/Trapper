@@ -90,12 +90,7 @@ async function bootstrap() {
     };
   });
 
-  // Apply auth to all API routes (skip health check)
-  app.addHook('onRequest', async (request, reply) => {
-    await apiKeyAuth(request, reply, () => {});
-  });
-
-  // Register routes
+  // Register routes (before auth hook so health/capabilities are not protected)
   registerScrapeRoutes(app);
   registerCrawlRoutes(app);
   registerMapRoutes(app);
@@ -104,6 +99,15 @@ async function bootstrap() {
   registerInteractRoutes(app);
   registerExtractRoutes(app);
   registerAgentRoutes(app);
+
+  // Apply auth to all API routes (skip health check and capabilities)
+  app.addHook('onRequest', async (request, reply) => {
+    // Skip auth for health check and capabilities endpoints
+    if (request.url === '/health' || request.url === '/api/capabilities') {
+      return;
+    }
+    await apiKeyAuth(request, reply, () => {});
+  });
 
   // Error handler
   app.setErrorHandler((error, request, reply) => {

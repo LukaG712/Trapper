@@ -259,7 +259,7 @@ export async function scrapeUrl(options: ScrapeOptions): Promise<ScrapeResult> {
   } = options;
 
   // SSRF protection: block requests to private/reserved addresses
-  if (isBlockedUrl(url)) {
+  if (await isBlockedUrl(url)) {
     logger.warn(`SSRF blocked: request to ${url} denied`);
     return {
       success: false,
