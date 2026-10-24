@@ -159,8 +159,10 @@ export async function discoverLinks(
       const resolved = new URL(href, baseUrl);
       if (!resolved.protocol.startsWith('http')) return;
 
-      // Skip anchor-only links
-      if (resolved.hash && resolved.pathname === baseUrl.split('/').slice(0, 3).join('/') + '/') return;
+      // Skip anchor-only links (same origin + pathname, only hash differs)
+      if (resolved.hash && resolved.origin === new URL(baseUrl).origin && resolved.pathname === new URL(baseUrl).pathname) {
+        return;
+      }
 
       const resolvedStr = resolved.toString();
 
